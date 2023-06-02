@@ -4,10 +4,11 @@
 #include <thread>
 
 class Data {
+
+public:
     int i;
     std::string name;
 
-public:
     Data(int i, std::string name) {
         this->i = i;
         this->name = name;
@@ -22,7 +23,6 @@ public:
 enum JobState {
     build,
     probe,
-    wait,
     done
 };
 
@@ -57,24 +57,19 @@ public:
 
     Dispatcher(std::vector<Data> dataset) {
         this->dataset = dataset;
-        morselStartIndex = 0;
-        morselEndIndex = morselStartIndex + morselSize;
-        if(morselEndIndex >= dataset.size()) {
-            morselEndIndex = dataset.size();
-        }
     }
 
     Work<Data> getWork() {
         JobState jobState;
         jobState = build;
         Work<Data> work(build);
-        work.morsel = std::vector<Data>(dataset.begin() + morselStartIndex, dataset.begin() + morselEndIndex - 1);
         morselStartIndex = morselEndIndex;
         morselEndIndex = morselStartIndex + morselSize;
         if(morselEndIndex >= dataset.size()) {
             morselEndIndex = dataset.size();
-
         }
+        work.morsel = std::vector<Data>(dataset.begin() + morselStartIndex, dataset.begin() + morselEndIndex - 1);
+
         return work;
     }
 
@@ -87,15 +82,28 @@ public:
     std::unordered_map<int, std::vector<Data>> localMap;
     Dispatcher dispatcher;
 
-    Worker(Dispatcher dispatcher1) {
-        this->dispatcher = dispatcher1;
+    Worker(Dispatcher dispatcher) {
+        this->dispatcher = dispatcher;
+    }
+
+    static void buildHashMap(Work<Data> work, std::unordered_map<int, std::vector<Data>> localMap) {
+        for(Data data : work.morsel) {
+            localMap[data.i].push_back(data);
+        }
     }
 
     void start() {
         if(isAlive) {
-            //get work from dispatcher
-            //start the work with thread
-            thread = std::thread();
+            Work<Data> work = dispatcher.getWork();
+            switch(work.jobState) {
+                case build:
+                    thread = std::thread(&Worker::buildHashMap, this, localMap);
+                    break;
+                case probe:
+                    break;
+                case done:
+                    break;
+            }
         }
     }
 };
