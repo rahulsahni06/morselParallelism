@@ -143,27 +143,26 @@ public:
     int id;
     bool isAlive = true;
     std::thread thread;
-    Dispatcher<TSource>* dispatcher;
 
-    Worker(Dispatcher<TSource> *dispatcher, int id) : dispatcher(dispatcher), id(id) {
+    Worker(int id) :id(id) {
     }
 
 
-    void buildHashMap(Work<TSource> *work) {
+    void buildHashMap(Work<TSource> *work, Dispatcher<TSource>* dispatcher1) {
         std::cout<<std::endl<<"runnning thread id "<<id<<std::endl;
         std::unordered_map<int, std::vector<TSource>> localMap;
         for(TSource tSource : work->morsel) {
             localMap[tSource.i].push_back(tSource);
         }
-        dispatcher->batchTransferToGlobalMap(localMap);
+        dispatcher1->batchTransferToGlobalMap(localMap);
     }
 
-    void start() {
+    void start(Dispatcher<TSource>* dispatcher1) {
         while(isAlive) {
-            Work<Data> work = dispatcher->getWork();
+            Work<Data> work = dispatcher1->getWork();
             switch(work.jobState) {
                 case build:
-                    buildHashMap(&work);
+                    buildHashMap(&work, dispatcher1);
                     break;
                 case probe:
                     isAlive = false;
@@ -176,8 +175,8 @@ public:
     }
 
 
-    void run() {
-        thread = std::thread(&Worker::start, this);
+    void run(Dispatcher<TSource> *dispatcher) {
+        thread = std::thread(&Worker::start, this, dispatcher);
 
     }
 
@@ -207,18 +206,20 @@ int main() {
 
     Dispatcher dispatcher(morselSize, noOfWorkers, dataset);
     std::vector<std::thread> threads;
-    std::vector<Worker<Data>*> workers;
+    Worker<Data>* workers[noOfWorkers];
+//    std::vector<Worker<Data>*> workers;
 
     for(int i = 0; i<dispatcher.getNoOfWorkers(); i++) {
-        Worker<Data> worker(&dispatcher, i);
-        worker.run();
-        workers.push_back(&worker);
+        Worker<Data> worker( i);
+        worker.run(&dispatcher);
+        workers[i] = &worker;
     }
 
    for(Worker<Data>* w : workers) {
        w->join();
        delete w;
    }
+   delete workers[noOfWorkers];
 
     std::unordered_map<int, std::vector<Data>> map = dispatcher.getGlobalHasMap();
     for(Data data1 : dataset) {
