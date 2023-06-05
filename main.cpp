@@ -41,6 +41,8 @@ public:
 };
 
 
+
+
 class Dispatcher {
 
     int morselSize;
@@ -51,15 +53,26 @@ class Dispatcher {
     int morselStartIndex = 0;
     int morselEndIndex = 0;
 
+    enum State {
+        building,
+        doneBuilding,
+        probing,
+        doneProbing
+    };
+
+
+
 public:
 
     std::mutex mutex;
+    State dispatcherState = building;
 
     Dispatcher(int morselSize, int noOfWorkers, const std::vector<Data> &dataset) : morselSize(morselSize),
-                                                                                 noOfWorkers(noOfWorkers),
-                                                                                 dataset(dataset) {}
+                                                                                    noOfWorkers(noOfWorkers),
+                                                                                    dataset(dataset) {}
 
     int getMorselSize() {
+
         return morselSize;
     }
 
@@ -67,24 +80,33 @@ public:
         return noOfWorkers;
     }
 
-    Work<Data> getWork() {
-        JobState jobState;
-        jobState = build;
-        Work<Data> work(build);
-        morselStartIndex = morselEndIndex;
-        morselEndIndex = morselStartIndex + morselSize;
-        if(morselEndIndex >= dataset.size()) {
-            morselEndIndex = dataset.size();
-        }
-        work.morsel = std::vector<Data>(dataset.begin() + morselStartIndex, dataset.begin() + morselEndIndex);
+    const std::unordered_map<int, std::vector<Data>> getGlobalHasMap() {
+        return globalHasMap;
+    }
 
+    Work<Data> getWork() {
+        if(dispatcherState == building) {
+            JobState jobState(build);
+            Work<Data> work(jobState);
+            morselStartIndex = morselEndIndex;
+            morselEndIndex = morselStartIndex + morselSize;
+            if(morselEndIndex >= dataset.size()) {
+                morselEndIndex = dataset.size();
+                dispatcherState = doneBuilding;
+            }
+            work.morsel = std::vector<Data>(dataset.begin() + morselStartIndex, dataset.begin() + morselEndIndex);
+            return work;
+        }
+        JobState jobState(probe);
+        Work<Data> work(jobState);
         return work;
     }
 
     void batchTransferToGlobalMap(std::unordered_map<int, std::vector<Data>> &localHashMap) {
         mutex.lock();
         for(std::pair pair : localHashMap) {
-            globalHasMap[pair.first] = pair.second;
+            for(Data data : pair.second)
+                globalHasMap[pair.first].push_back(data);
         }
         mutex.unlock();
     }
@@ -109,31 +131,27 @@ public:
     Worker(Dispatcher *dispatcher) : dispatcher(dispatcher) {}
 
 
-    void buildHashMap(Work<Data> work) {
+    void buildHashMap(Work<Data> *work) {
         std::unordered_map<int, std::vector<Data>> localMap;
-        for(Data data : work.morsel) {
-            data.print();
-            try {
-
-                localMap[data.i].push_back(data);
-            } catch (const std::exception &exc) {
-                // catch anything thrown within try block that derives from std::exception
-                std::cerr << exc.what();
-            }
+        for(Data data : work->morsel) {
+            localMap[data.i].push_back(data);
         }
         dispatcher->batchTransferToGlobalMap(localMap);
     }
 
     void start() {
-        if(isAlive) {
+        while(isAlive) {
             Work<Data> work = dispatcher->getWork();
             switch(work.jobState) {
                 case build:
-                    thread = std::thread(&Worker::buildHashMap, this, work);
+                    thread = std::thread(&Worker::buildHashMap, this, &work);
+                    thread.join();
                     break;
                 case probe:
+                    isAlive = false;
                     break;
                 case done:
+                    isAlive = false;
                     break;
             }
         }
@@ -143,32 +161,37 @@ public:
 
 
 int main() {
-    Data data(1, "123");
-    Data data2(2, "1234");
 
     std::vector<Data> dataset;
-    for(int i = 0; i<1000; i++) {
+    for(int i = 0; i<100; i++) {
         dataset.emplace_back(i, "name" + std::to_string(i));
     }
-    for(int i = 0; i<1000; i++) {
+    for(int i = 0; i<100; i++) {
+        dataset.emplace_back(i, "name" + std::to_string(i));
+    }
+    for(int i = 0; i<100; i++) {
         dataset.emplace_back(i, "name" + std::to_string(i));
     }
 
     int morselSize = 10;
-    int noOfWorkers = 8;
+    int noOfWorkers = 4;
 
     Dispatcher dispatcher(morselSize, noOfWorkers, dataset);
-    Work<Data> work = dispatcher.getWork();
-    Worker worker(&dispatcher);
-    worker.start();
-//    for(int i = 0; i<dispatcher.getNoOfWorkers(); i++) {
-//        Worker worker(&dispatcher);
-//        worker.start();
-//    }
 
-    std::unordered_map<int, std::vector<Data>> map;
-    for(Data data1: dataset) {
-        map[data1.i].push_back(data1);
+    for(int i = 0; i<dispatcher.getNoOfWorkers(); i++) {
+        Worker worker(&dispatcher);
+        worker.start();
     }
-}
 
+    std::unordered_map<int, std::vector<Data>> map = dispatcher.getGlobalHasMap();
+    for(Data data1 : dataset) {
+        auto itr = map.find(data1.i);
+        if (itr == map.end()) {
+            std::cout<<data1.i<<" not found"<<std::endl;
+        } else {
+
+        }
+    }
+
+    std::cout<<"Done";
+}
