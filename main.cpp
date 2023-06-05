@@ -2,7 +2,6 @@
 #include <vector>
 #include <unordered_map>
 #include <thread>
-#include <mutex>
 
 class Data {
 
@@ -10,10 +9,21 @@ public:
     int i;
     std::string name;
 
-    Data(int i, std::string name) {
-        this->i = i;
-        this->name = name;
+    Data(int i, const std::string &name) : i(i), name("Data_"+name) {}
+
+    void print() {
+        std::cout<<i<<" "<<name<<std::endl;
     }
+
+};
+
+class Data2 {
+
+public:
+    int i;
+    std::string name;
+
+    Data2(int i, const std::string &name) : i(i), name("Data2_"+name) {}
 
     void print() {
         std::cout<<i<<" "<<name<<std::endl;
@@ -28,11 +38,11 @@ enum JobState {
 };
 
 
-template <class T>
+template <class TSource>
 class Work {
 public:
     JobState jobState;
-    std::vector<Data> morsel;
+    std::vector<TSource> morsel;
 
     Work(JobState state) {
         jobState = state;
@@ -42,13 +52,13 @@ public:
 
 
 
-
+template <class TSource>
 class Dispatcher {
 
     int morselSize;
     int noOfWorkers;
-    std::vector<Data> dataset;
-    std::unordered_map<int, std::vector<Data>> globalHasMap;
+    std::vector<TSource> dataset;
+    std::unordered_map<int, std::vector<TSource>> globalHasMap;
 
     int morselStartIndex = 0;
     int morselEndIndex = 0;
@@ -65,9 +75,10 @@ class Dispatcher {
 public:
 
     std::mutex mutex;
+    std::mutex mutex2;
     State dispatcherState = building;
 
-    Dispatcher(int morselSize, int noOfWorkers, const std::vector<Data> &dataset) : morselSize(morselSize),
+    Dispatcher(int morselSize, int noOfWorkers, const std::vector<TSource> &dataset) : morselSize(morselSize),
                                                                                     noOfWorkers(noOfWorkers),
                                                                                     dataset(dataset) {}
 
@@ -80,11 +91,12 @@ public:
         return noOfWorkers;
     }
 
-    const std::unordered_map<int, std::vector<Data>> getGlobalHasMap() {
+    const std::unordered_map<int, std::vector<TSource>> getGlobalHasMap() {
         return globalHasMap;
     }
 
     Work<Data> getWork() {
+        mutex2.lock();
         if(dispatcherState == building) {
             JobState jobState(build);
             Work<Data> work(jobState);
@@ -95,18 +107,20 @@ public:
                 dispatcherState = doneBuilding;
             }
             work.morsel = std::vector<Data>(dataset.begin() + morselStartIndex, dataset.begin() + morselEndIndex);
+            mutex2.unlock();
             return work;
         }
         JobState jobState(probe);
         Work<Data> work(jobState);
+        mutex2.unlock();
         return work;
     }
 
-    void batchTransferToGlobalMap(std::unordered_map<int, std::vector<Data>> &localHashMap) {
+    void batchTransferToGlobalMap(std::unordered_map<int, std::vector<TSource>> &localHashMap) {
         mutex.lock();
         for(std::pair pair : localHashMap) {
-            for(Data data : pair.second)
-                globalHasMap[pair.first].push_back(data);
+            for(TSource tSource : pair.second)
+                globalHasMap[pair.first].push_back(tSource);
         }
         mutex.unlock();
     }
@@ -114,7 +128,7 @@ public:
     void printMap() {
         for(auto pair : globalHasMap) {
             std::cout<<std::endl<<"Key: "<<pair.first<<" Size: "<<pair.second.size()<<std::endl;
-            for(Data data : pair.second) {
+            for(TSource data : pair.second) {
                 data.print();
             }
         }
@@ -122,19 +136,24 @@ public:
 
 };
 
+template <class TSource>
 class Worker {
 public:
+
+    int id;
     bool isAlive = true;
     std::thread thread;
-    Dispatcher* dispatcher;
+    Dispatcher<TSource>* dispatcher;
 
-    Worker(Dispatcher *dispatcher) : dispatcher(dispatcher) {}
+    Worker(Dispatcher<TSource> *dispatcher, int id) : dispatcher(dispatcher), id(id) {
+    }
 
 
-    void buildHashMap(Work<Data> *work) {
-        std::unordered_map<int, std::vector<Data>> localMap;
-        for(Data data : work->morsel) {
-            localMap[data.i].push_back(data);
+    void buildHashMap(Work<TSource> *work) {
+        std::cout<<std::endl<<"runnning thread id "<<id<<std::endl;
+        std::unordered_map<int, std::vector<TSource>> localMap;
+        for(TSource tSource : work->morsel) {
+            localMap[tSource.i].push_back(tSource);
         }
         dispatcher->batchTransferToGlobalMap(localMap);
     }
@@ -144,8 +163,7 @@ public:
             Work<Data> work = dispatcher->getWork();
             switch(work.jobState) {
                 case build:
-                    thread = std::thread(&Worker::buildHashMap, this, &work);
-                    thread.join();
+                    buildHashMap(&work);
                     break;
                 case probe:
                     isAlive = false;
@@ -156,6 +174,17 @@ public:
             }
         }
     }
+
+
+    void run() {
+        thread = std::thread(&Worker::start, this);
+
+    }
+
+    void join() {
+        thread.join();
+    }
+
 };
 
 
@@ -163,13 +192,13 @@ public:
 int main() {
 
     std::vector<Data> dataset;
-    for(int i = 0; i<100; i++) {
+    for(int i = 0; i<1000; i++) {
         dataset.emplace_back(i, "name" + std::to_string(i));
     }
-    for(int i = 0; i<100; i++) {
+    for(int i = 0; i<1000; i++) {
         dataset.emplace_back(i, "name" + std::to_string(i));
     }
-    for(int i = 0; i<100; i++) {
+    for(int i = 0; i<1000; i++) {
         dataset.emplace_back(i, "name" + std::to_string(i));
     }
 
@@ -177,11 +206,19 @@ int main() {
     int noOfWorkers = 4;
 
     Dispatcher dispatcher(morselSize, noOfWorkers, dataset);
+    std::vector<std::thread> threads;
+    std::vector<Worker<Data>*> workers;
 
     for(int i = 0; i<dispatcher.getNoOfWorkers(); i++) {
-        Worker worker(&dispatcher);
-        worker.start();
+        Worker<Data> worker(&dispatcher, i);
+        worker.run();
+        workers.push_back(&worker);
     }
+
+   for(Worker<Data>* w : workers) {
+       w->join();
+       delete w;
+   }
 
     std::unordered_map<int, std::vector<Data>> map = dispatcher.getGlobalHasMap();
     for(Data data1 : dataset) {
