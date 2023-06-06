@@ -34,6 +34,7 @@ public:
 
 enum JobState {
     build,
+    buildDone,
     probe,
     done
 };
@@ -53,12 +54,13 @@ public:
 
 
 
-template <class TSource>
+template <class TSource, class TProbSource>
 class Dispatcher {
 
     int morselSize;
     int noOfWorkers;
     std::vector<TSource> dataset;
+    std::vector<TProbSource> probeDataset;
     std::unordered_map<int, std::vector<TSource>> globalHasMap;
 
     int morselStartIndex = 0;
@@ -77,11 +79,15 @@ public:
 
     std::mutex mutex;
     std::mutex mutex2;
+    std::mutex workerStatusMutex;
     State dispatcherState = building;
+    std::unordered_map<int, JobState> workersJobState;
 
-    Dispatcher(int morselSize, int noOfWorkers, const std::vector<TSource> &dataset) : morselSize(morselSize),
-                                                                                    noOfWorkers(noOfWorkers),
-                                                                                    dataset(dataset) {}
+    Dispatcher(int morselSize, int noOfWorkers, const std::vector<TSource> &dataset,
+               const std::vector<TProbSource> &probeDataset) : morselSize(morselSize),
+                                                           noOfWorkers(noOfWorkers),
+                                                           dataset(dataset),
+                                                           probeDataset(probeDataset){}
 
     int getMorselSize() {
 
@@ -96,7 +102,7 @@ public:
         return globalHasMap;
     }
 
-    Work<Data> getWork() {
+    Work<TSource> getWork() {
         mutex2.lock();
         if(dispatcherState == building) {
             JobState jobState(build);
@@ -134,10 +140,15 @@ public:
             }
         }
     }
+    void updateWorkerJobStatus(int workerId, JobState jobState) {
+        workerStatusMutex.lock();
+        workersJobState[workerId] = jobState;
+        workerStatusMutex.unlock();
+    }
 
 };
 
-template <class TSource>
+template <class TSource, class TProbSource>
 class Worker {
 public:
 
@@ -145,22 +156,23 @@ public:
     bool isAlive = true;
 //    std::thread thread;
 
-    Worker(int id) :id(id) {
-    }
+    Worker(int id) :id(id) {}
 
 
-    void buildHashMap(Work<TSource> *work, Dispatcher<TSource>* dispatcher1) {
+    void buildHashMap(Work<TSource> *work, Dispatcher<TSource, TProbSource>* dispatcher1) {
+        dispatcher1->updateWorkerJobStatus(id, JobState::build);
         std::cout<<std::endl<<"runnning thread id "<<id<<std::endl;
         std::unordered_map<int, std::vector<TSource>> localMap;
         for(TSource tSource : work->morsel) {
             localMap[tSource.i].push_back(tSource);
         }
         dispatcher1->batchTransferToGlobalMap(localMap);
+        dispatcher1->updateWorkerJobStatus(id, JobState::buildDone);
     }
 
-    void start(Dispatcher<TSource>* dispatcher1) {
+    void start(Dispatcher<TSource, TProbSource>* dispatcher1) {
         while(isAlive) {
-            Work<Data> work = dispatcher1->getWork();
+            Work<TSource> work = dispatcher1->getWork();
             switch(work.jobState) {
                 case build:
                     buildHashMap(&work, dispatcher1);
@@ -176,7 +188,7 @@ public:
     }
 
 
-    std::thread run(Dispatcher<TSource> *dispatcher) {
+    std::thread run(Dispatcher<TSource, TProbSource> *dispatcher) {
         return std::thread(&Worker::start, this, dispatcher);
 
     }
@@ -192,24 +204,28 @@ public:
 int main() {
 
     std::vector<Data> dataset;
+    std::vector<Data2> probDataset;
     for(int i = 0; i<1000; i++) {
         dataset.emplace_back(i, "name" + std::to_string(i));
+        probDataset.emplace_back(i, "data2 "+ std::to_string(i));
     }
     for(int i = 0; i<1000; i++) {
         dataset.emplace_back(i, "name" + std::to_string(i));
+        probDataset.emplace_back(i, "data2 "+ std::to_string(i));
     }
     for(int i = 0; i<1000; i++) {
         dataset.emplace_back(i, "name" + std::to_string(i));
+        probDataset.emplace_back(i, "data2 "+ std::to_string(i));
     }
 
     int morselSize = 1000;
     int noOfWorkers = 4;
 
-    Dispatcher dispatcher(morselSize, noOfWorkers, dataset);
+    Dispatcher dispatcher(morselSize, noOfWorkers, dataset, probDataset);
     std::thread threads[noOfWorkers];
 
     for(int i = 0; i<dispatcher.getNoOfWorkers(); i++) {
-        Worker<Data> worker( i);
+        Worker<Data, Data2> worker( i);
         threads[i] = worker.run(&dispatcher);
     }
 
