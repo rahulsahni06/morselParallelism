@@ -2,6 +2,7 @@
 #include <vector>
 #include <unordered_map>
 #include <thread>
+#include <mutex>
 
 class Data {
 
@@ -142,7 +143,7 @@ public:
 
     int id;
     bool isAlive = true;
-    std::thread thread;
+//    std::thread thread;
 
     Worker(int id) :id(id) {
     }
@@ -175,13 +176,13 @@ public:
     }
 
 
-    void run(Dispatcher<TSource> *dispatcher) {
-        thread = std::thread(&Worker::start, this, dispatcher);
+    std::thread run(Dispatcher<TSource> *dispatcher) {
+        return std::thread(&Worker::start, this, dispatcher);
 
     }
 
     void join() {
-        thread.join();
+//        thread.join();
     }
 
 };
@@ -201,25 +202,20 @@ int main() {
         dataset.emplace_back(i, "name" + std::to_string(i));
     }
 
-    int morselSize = 10;
+    int morselSize = 1000;
     int noOfWorkers = 4;
 
     Dispatcher dispatcher(morselSize, noOfWorkers, dataset);
-    std::vector<std::thread> threads;
-    Worker<Data>* workers[noOfWorkers];
-//    std::vector<Worker<Data>*> workers;
+    std::thread threads[noOfWorkers];
 
     for(int i = 0; i<dispatcher.getNoOfWorkers(); i++) {
         Worker<Data> worker( i);
-        worker.run(&dispatcher);
-        workers[i] = &worker;
+        threads[i] = worker.run(&dispatcher);
     }
 
-   for(Worker<Data>* w : workers) {
-       w->join();
-       delete w;
-   }
-   delete workers[noOfWorkers];
+    for(std::thread& t : threads) {
+        t.join();
+    }
 
     std::unordered_map<int, std::vector<Data>> map = dispatcher.getGlobalHasMap();
     for(Data data1 : dataset) {
