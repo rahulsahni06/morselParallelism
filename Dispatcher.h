@@ -14,6 +14,7 @@
 #include "Results.h"
 #include "JobState.h"
 #include "Work.h"
+#include "timeUtils.h"
 
 template <class TSource, class TProbSource, class THashKey>
 class Dispatcher {
@@ -24,6 +25,10 @@ class Dispatcher {
     std::vector<TProbSource> probeDataset;
     std::unordered_map<int, std::vector<TSource>> globalHasMap;
     std::vector<Results<TSource, TProbSource>> results;
+    uint64_t buildStartTime;
+    uint64_t probeStartTime;
+    bool isBuildTimeLogged = false;
+    bool isProbeTimeLogged = false;
 
     int morselStartIndex = 0;
     int morselEndIndex = 0;
@@ -53,7 +58,9 @@ public:
                const std::vector<TProbSource> &probeDataset) : morselSize(morselSize),
                                                                noOfWorkers(noOfWorkers),
                                                                dataset(dataset),
-                                                               probeDataset(probeDataset){}
+                                                               probeDataset(probeDataset){
+        buildStartTime = timeSinceEpochMilliSec();
+    }
 
     int getMorselSize() {
         return morselSize;
@@ -92,6 +99,14 @@ public:
         }
         if(dispatcherState == Dispatcher::State::probingMorsels) {
             if(isBuildDone()) {
+                if(!isBuildTimeLogged) {
+                    uint64_t endTime = timeSinceEpochMilliSec();
+                    std::cout<<"Build done"<<std::endl;
+                    logTimeTaken(buildStartTime, endTime, "Build time: ");
+                    probeStartTime = timeSinceEpochMilliSec();
+                    isBuildTimeLogged = true;
+                }
+
                 JobState jobState(JobState::probe);
                 Work<TSource, TProbSource> work(jobState);
                 morselStartIndex = morselEndIndex;
@@ -113,6 +128,9 @@ public:
         }
         if(dispatcherState == Dispatcher::State::doneProbingMorsels) {
             if(isProbeDone()) {
+                uint64_t endTime = timeSinceEpochMilliSec();
+                std::cout<<"Probe done"<<std::endl;
+                logTimeTaken(probeStartTime, endTime, "probe time: ");
                 dispatcherState = Dispatcher::State::done;
                 JobState jobState(JobState::done);
                 Work<TSource, TProbSource> work(jobState);
@@ -134,7 +152,7 @@ public:
 
     std::vector<TSource> getHashedItem(THashKey tHashKey) {
         readHashedItemMutex.lock();
-
+        //concurrent hashmap
         auto itr = globalHasMap.find(tHashKey);
         if (itr == globalHasMap.end()) {
             readHashedItemMutex.unlock();

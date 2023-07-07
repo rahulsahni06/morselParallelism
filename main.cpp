@@ -4,9 +4,12 @@
 #include <thread>
 #include <mutex>
 #include <fstream>
+#include <iomanip>
 #include "Dispatcher.h"
 #include "Worker.h"
 #include "Results.h"
+#include <chrono>
+#include "timeUtils.h"
 
 class Data {
 
@@ -42,29 +45,45 @@ int main() {
     std::vector<Data> dataset;
     std::vector<Data2> probDataset;
     for(int i = 0; i<1000000; i++) {
-        dataset.emplace_back(i, "name" + std::to_string(i));
+        probDataset.emplace_back(i, "data2_name"+ std::to_string(i));
+//        dataset.emplace_back(i, "name" + std::to_string(i));
     }
 
-    for(int i = 0 ; i<1000; i+=5) {
-        probDataset.emplace_back(i, "data2 "+ std::to_string(i));
+    for(int i = 0 ; i<100000; i+=5) {
+        dataset.emplace_back(i, "name" + std::to_string(i));
+//        probDataset.emplace_back(i, "data2_name"+ std::to_string(i));
     }
 
     std::cout<<"Starting dispatcher"<<std::endl;
 
     int morselSize = 1000;
-    int noOfWorkers = 8;
+    int noOfWorkers = 4;
+
+    uint64_t startTime = timeSinceEpochMilliSec();
 
     Dispatcher<Data, Data2, int> dispatcher(morselSize, noOfWorkers, dataset, probDataset);
     std::thread threads[noOfWorkers];
+    std::vector<Worker<Data, Data2, Results<Data, Data2>, int>*> workers;
+
 
     for(int i = 0; i<dispatcher.getNoOfWorkers(); i++) {
-        Worker<Data, Data2, Results<Data, Data2>, int> worker( i);
-        threads[i] = worker.run(&dispatcher);
+        std::cout<<i<<std::endl;
+        Worker<Data, Data2, Results<Data, Data2>, int>* worker = new Worker<Data, Data2, Results<Data, Data2>, int>(i);
+        workers.push_back(worker);
+        threads[i] = worker->run(&dispatcher);
     }
+
 
     for(std::thread& t : threads) {
         t.join();
     }
+
+    for(auto &w : workers) {
+        delete w;
+    }
+//
+    uint64_t endTime = timeSinceEpochMilliSec();
+    std::cout<<"time: "<<std::setprecision(15)<<(endTime - startTime)/1000.0;
 
 //    std::unordered_map<int, std::vector<Data>> map = dispatcher.getGlobalHasMap();
 //    for(Data data1 : dataset) {
@@ -74,9 +93,9 @@ int main() {
 //        }
 //    }
 
-    std::vector<Results<Data, Data2>> results = dispatcher.getResults();
-    for(const Results<Data, Data2>& result : results) {
-        std::cout<<result.tSource.i<<"|"<<result.tSource.name<<"|"<<result.tProbeSource.name<<std::endl;
-    }
+//    std::vector<Results<Data, Data2>> results = dispatcher.getResults();
+//    for(const Results<Data, Data2>& result : results) {
+//        std::cout<<result.tSource.i<<"|"<<result.tSource.name<<"|"<<result.tProbeSource.name<<std::endl;
+//    }
 
 }
