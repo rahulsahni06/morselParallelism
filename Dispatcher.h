@@ -16,14 +16,26 @@
 #include "Work.h"
 #include "timeUtils.h"
 
+#include "oneapi/tbb/concurrent_hash_map.h"
+#include "oneapi/tbb/blocked_range.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/tick_count.h"
+#include "oneapi/tbb/tbb_allocator.h"
+#include "oneapi/tbb/global_control.h"
+
+
 template <class TSource, class TProbSource, class THashKey>
 class Dispatcher {
+
+    typedef oneapi::tbb::concurrent_hash_map<int, std::vector<TSource>> ConcurrentHashMap;
+
 
     int morselSize;
     int noOfWorkers;
     std::vector<TSource> dataset;
     std::vector<TProbSource> probeDataset;
     std::unordered_map<int, std::vector<TSource>> globalHasMap;
+    ConcurrentHashMap globalHashMap2;
     std::vector<Results<TSource, TProbSource>> results;
     uint64_t buildStartTime;
     uint64_t probeStartTime;
@@ -150,17 +162,38 @@ public:
         return work;
     }
 
+    std::vector<TSource> getHashedItem2(THashKey tHashKey) {
+        typename ConcurrentHashMap::accessor a;
+        globalHashMap2.find(a, tHashKey);
+        if(a.empty()) {
+            std::vector<TSource> emptyResult;
+            return emptyResult;
+        }
+        return a->second;
+
+    }
+
     std::vector<TSource> getHashedItem(THashKey tHashKey) {
-        readHashedItemMutex.lock();
+//        readHashedItemMutex.lock();
         //concurrent hashmap
         auto itr = globalHasMap.find(tHashKey);
         if (itr == globalHasMap.end()) {
-            readHashedItemMutex.unlock();
+//            readHashedItemMutex.unlock();
             std::vector<TSource> emptyResult;
             return emptyResult;
         } else {
-            readHashedItemMutex.unlock();
+//            readHashedItemMutex.unlock();
             return itr->second;
+        }
+    }
+
+    void batchTransferToGlobalMap2(std::unordered_map<int, std::vector<TSource>> &localHashMap) {
+        for(std::pair pair : localHashMap) {
+            for (TSource tSource: pair.second) {
+                typename ConcurrentHashMap::accessor a;
+                globalHashMap2.insert(a, pair.first);
+                a->second.push_back(tSource);
+            }
         }
     }
 

@@ -31,19 +31,22 @@ public:
     }
 
     void buildHashMap(Work<TSource, TProbSource> *work, Dispatcher<TSource, TProbSource, THashKey>* dispatcher) {
-        logMessage(logMode, ("build: "+std::to_string(id)));
+//        if(id == 0 || id == 1) {
+//            std::this_thread::sleep_for(std::chrono::seconds(3));
+//        }
+//        logMessage(logMode, ("build: "+std::to_string(id)));
         std::unordered_map<int, std::vector<TSource>> localMap;
         for(TSource tSource : work->buildMorsel) {
             localMap[tSource.i].push_back(tSource);
         }
-        logMessage(logMode, ("build complete: "+std::to_string(id)));
         dispatcher->updateWorkerJobStatus(id, JobState::build);
         dispatcher->batchTransferToGlobalMap(localMap);
         dispatcher->updateWorkerJobStatus(id, JobState::buildDone);
+        logMessage(logMode, ("build complete: "+std::to_string(id)));
     }
 
     void probeHashMap(Work<TSource, TProbSource> *work, Dispatcher<TSource, TProbSource, THashKey>* dispatcher) {
-        logMessage(logMode, ("probe: "+std::to_string(id)));
+//        logMessage(logMode, ("probe: "+std::to_string(id)));
         std::vector<TResult> localResults;
         for(TProbSource probSource : work->probeMorsel) {
             std::vector<TSource> hashedResult = dispatcher->getHashedItem(probSource.i);
@@ -69,6 +72,7 @@ public:
                     buildHashMap(&work, dispatcher1);
                     break;
                 case JobState::waitingBuild:
+//                    logMessage(logMode, ("waiting build for other threads: "+std::to_string(id)));
                     //Wait for other threads to finish build phase
                     break;
                 case JobState::probe:
@@ -77,6 +81,7 @@ public:
                     break;
                 case JobState::waitingProbe:
                     //Wait for other threads to finish probe phase
+//                    logMessage(logMode, ("waiting probe for other threads: "+std::to_string(id)));
                     break;
                 case JobState::done:
                     isAlive = false;
