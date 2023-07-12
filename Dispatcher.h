@@ -162,6 +162,12 @@ public:
         return work;
     }
 
+    void addToHashMap(TSource data) {
+        typename ConcurrentHashMap::accessor a;
+        globalHashMap2.insert(a, data.i);
+        a->second.push_back(data);
+    }
+
     std::vector<TSource> getHashedItem2(THashKey tHashKey) {
         typename ConcurrentHashMap::accessor a;
         globalHashMap2.find(a, tHashKey);
@@ -204,6 +210,12 @@ public:
                 globalHasMap[pair.first].push_back(tSource);
         }
         readHashedItemMutex.unlock();
+    }
+
+    void storeResult(Results<TSource, TProbSource>& result) {
+        resultMutex.lock();
+        results.push_back(result);
+        resultMutex.unlock();
     }
 
     void batchStoreResult(std::vector<Results<TSource, TProbSource>> localResults) {
