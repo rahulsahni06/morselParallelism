@@ -11,7 +11,6 @@
 #include <thread>
 #include <mutex>
 #include <fstream>
-#include "Results.h"
 #include "JobState.h"
 #include "Work.h"
 #include "timeUtils.h"
@@ -22,21 +21,24 @@
 #include "oneapi/tbb/tick_count.h"
 #include "oneapi/tbb/tbb_allocator.h"
 #include "oneapi/tbb/global_control.h"
+#include "oneapi/tbb/concurrent_vector.h"
 
 
-template <class TSource, class TProbSource, class THashKey>
+template <class TSource, class TProbSource, class THashKey, class TResult>
 class Dispatcher {
 
     typedef oneapi::tbb::concurrent_hash_map<int, std::vector<TSource>> ConcurrentHashMap;
+    typedef oneapi::tbb::concurrent_vector<TResult> ConcurrentVector;
 
 
     int morselSize;
     int noOfWorkers;
     std::vector<TSource> dataset;
     std::vector<TProbSource> probeDataset;
-    std::unordered_map<int, std::vector<TSource>> globalHasMap;
-    ConcurrentHashMap globalHashMap2;
-    std::vector<Results<TSource, TProbSource>> results;
+    std::unordered_map<THashKey, std::vector<TSource>> globalHasMap;
+    ConcurrentHashMap globalHashMap;
+    ConcurrentVector results;
+
     uint64_t buildStartTime;
     uint64_t probeStartTime;
     bool isBuildTimeLogged = false;
@@ -82,35 +84,47 @@ public:
         return noOfWorkers;
     }
 
-    const std::unordered_map<int, std::vector<TSource>>& getGlobalHasMap() {
+    const std::vector<TSource>* getDataset() const {
+        return &dataset;
+    }
+
+    const std::vector<TProbSource>* getProbeDataset() const {
+        return &probeDataset;
+    }
+
+    const std::unordered_map<int, std::vector<TSource>> &getGlobalHasMap() {
         return globalHasMap;
     }
 
-    const std::vector<Results<TSource, TProbSource>>& getResults() {
+    const ConcurrentVector &getResults() const {
         return results;
     }
 
     Work<TSource, TProbSource> getWork() {
         workMutex.lock();
-        if(dispatcherState == Dispatcher::State::buildingMorsels) {
+        if (dispatcherState == Dispatcher::State::buildingMorsels) {
             JobState jobState(JobState::build);
             Work<TSource, TProbSource> work(jobState);
             morselStartIndex = morselEndIndex;
             morselEndIndex = morselStartIndex + morselSize;
-            if(morselEndIndex >= dataset.size()) {
+            if (morselEndIndex >= dataset.size()) {
                 morselEndIndex = dataset.size();
                 dispatcherState = Dispatcher::State::probingMorsels;
             }
-            work.buildMorsel = std::vector<TSource>(dataset.begin() + morselStartIndex, dataset.begin() + morselEndIndex);
-            if(dispatcherState == Dispatcher::State::probingMorsels) {
+            work.buildMorsel = std::vector<TSource>(dataset.begin() + morselStartIndex,
+                                                    dataset.begin() + morselEndIndex);
+            work.startIdx = morselStartIndex;
+            work.endIdx = morselEndIndex;
+            if (dispatcherState == Dispatcher::State::probingMorsels) {
                 morselStartIndex = 0;
                 morselEndIndex = 0;
             }
             workMutex.unlock();
             return work;
         }
-        if(dispatcherState == Dispatcher::State::probingMorsels) {
-            if(isBuildDone()) {
+        if (dispatcherState == Dispatcher::State::probingMorsels) {
+            if (isBuildDone()) {
+//                std::cout<<"Build done"<<std::endl;
                 if(!isBuildTimeLogged) {
                     uint64_t endTime = timeSinceEpochMilliSec();
                     std::cout<<"Build done"<<std::endl;
@@ -118,16 +132,18 @@ public:
                     probeStartTime = timeSinceEpochMilliSec();
                     isBuildTimeLogged = true;
                 }
-
                 JobState jobState(JobState::probe);
                 Work<TSource, TProbSource> work(jobState);
                 morselStartIndex = morselEndIndex;
                 morselEndIndex = morselStartIndex + morselSize;
-                if(morselEndIndex >= probeDataset.size()) {
+                if (morselEndIndex >= probeDataset.size()) {
                     morselEndIndex = probeDataset.size();
                     dispatcherState = Dispatcher::State::doneProbingMorsels;
                 }
-                work.probeMorsel = std::vector<TProbSource>(probeDataset.begin() + morselStartIndex, probeDataset.begin() + morselEndIndex);
+//                work.probeMorsel = std::vector<TProbSource>(probeDataset.begin() + morselStartIndex,
+//                                                            probeDataset.begin() + morselEndIndex);
+                work.startIdx = morselStartIndex;
+                work.endIdx = morselEndIndex;
                 workMutex.unlock();
                 return work;
             } else {
@@ -138,11 +154,12 @@ public:
             }
 
         }
-        if(dispatcherState == Dispatcher::State::doneProbingMorsels) {
-            if(isProbeDone()) {
+        if (dispatcherState == Dispatcher::State::doneProbingMorsels) {
+            if (isProbeDone()) {
                 uint64_t endTime = timeSinceEpochMilliSec();
                 std::cout<<"Probe done"<<std::endl;
-                logTimeTaken(probeStartTime, endTime, "probe time: ");
+                logTimeTaken(probeStartTime, endTime, "Probe time: ");
+
                 dispatcherState = Dispatcher::State::done;
                 JobState jobState(JobState::done);
                 Work<TSource, TProbSource> work(jobState);
@@ -162,76 +179,26 @@ public:
         return work;
     }
 
-    void addToHashMap(TSource data) {
+    void addToHashMap(TSource& data, THashKey& hashKey) {
         typename ConcurrentHashMap::accessor a;
-        globalHashMap2.insert(a, data.i);
+        globalHashMap.insert(a, hashKey);
         a->second.push_back(data);
     }
 
-    std::vector<TSource> getHashedItem2(THashKey tHashKey) {
+    std::vector<TSource>* getHashedItem3(THashKey& tHashKey) {
         typename ConcurrentHashMap::accessor a;
-        globalHashMap2.find(a, tHashKey);
+        globalHashMap.find(a, tHashKey);
         if(a.empty()) {
-            std::vector<TSource> emptyResult;
-            return emptyResult;
+            return nullptr;
         }
-        return a->second;
+        return &(a->second);
 
     }
 
-    std::vector<TSource> getHashedItem(THashKey tHashKey) {
-//        readHashedItemMutex.lock();
-        //concurrent hashmap
-        auto itr = globalHasMap.find(tHashKey);
-        if (itr == globalHasMap.end()) {
-//            readHashedItemMutex.unlock();
-            std::vector<TSource> emptyResult;
-            return emptyResult;
-        } else {
-//            readHashedItemMutex.unlock();
-            return itr->second;
-        }
+    void storeResult2(TResult& tuple) {
+        results.push_back(tuple);
     }
 
-    void batchTransferToGlobalMap2(std::unordered_map<int, std::vector<TSource>> &localHashMap) {
-        for(std::pair pair : localHashMap) {
-            for (TSource tSource: pair.second) {
-                typename ConcurrentHashMap::accessor a;
-                globalHashMap2.insert(a, pair.first);
-                a->second.push_back(tSource);
-            }
-        }
-    }
-
-    void batchTransferToGlobalMap(std::unordered_map<int, std::vector<TSource>> &localHashMap) {
-        readHashedItemMutex.lock();
-        for(std::pair pair : localHashMap) {
-            for(TSource tSource : pair.second)
-                globalHasMap[pair.first].push_back(tSource);
-        }
-        readHashedItemMutex.unlock();
-    }
-
-    void storeResult(Results<TSource, TProbSource>& result) {
-        resultMutex.lock();
-        results.push_back(result);
-        resultMutex.unlock();
-    }
-
-    void batchStoreResult(std::vector<Results<TSource, TProbSource>> localResults) {
-        resultMutex.lock();
-        results.insert(results.end(),localResults.begin(),localResults.end());
-        resultMutex.unlock();
-    }
-
-    void printMap() {
-        for(auto pair : globalHasMap) {
-            std::cout<<std::endl<<"Key: "<<pair.first<<" Size: "<<pair.second.size()<<std::endl;
-            for(TSource data : pair.second) {
-                data.print();
-            }
-        }
-    }
 
     void updateWorkerJobStatus(int workerId, JobState jobState) {
         workerStatusMutex.lock();
@@ -241,7 +208,7 @@ public:
 
     bool isBuildDone() {
         bool isDone = true;
-        for(std::pair pair : workersJobState) {
+        for (std::pair pair: workersJobState) {
             isDone = isDone && (pair.second == JobState::buildDone || pair.second == JobState::probe
                                 || pair.second == JobState::probeDone || pair.second == JobState::done);
         }
@@ -250,8 +217,8 @@ public:
 
     bool isProbeDone() {
         bool isDone = true;
-        for(std::pair pair : workersJobState) {
-            isDone = isDone && (pair.second == probeDone);
+        for (std::pair pair: workersJobState) {
+            isDone = isDone && (pair.second == JobState::probeDone || pair.second == JobState::waitingProbe);
         }
         return isDone;
     }

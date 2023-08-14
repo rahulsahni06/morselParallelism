@@ -19,6 +19,8 @@ public:
     JobState jobState;
     std::vector<TSource> buildMorsel;
     std::vector<TProbSource> probeMorsel;
+    int startIdx;
+    int endIdx;
 
     Work(JobState state) {
         jobState = state;
